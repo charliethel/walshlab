@@ -1,0 +1,435 @@
+---
+title: "ca_chip_cosmic"
+author: "Charlie Thel"
+date: '2023-03-27'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+```{r}
+library(tidyverse)
+library(dplyr)
+df <- read_csv("chip_scanmp_cosmic_filter_covid.csv")
+
+
+df <- df %>%
+  mutate(across("loy", as.numeric))
+
+df$status <- df$hosp_all_first >= 1
+df$status[is.na(df$status)] <- 0
+df$time <- df$days_first_hf
+
+df$time[is.na(df$time)] <- df$days_last_fu
+
+df$status_cv <- df$hosp_cv_first >= 1
+df$status_cv[is.na(df$status_cv)] <- 0
+df$time_cv <- df$days_first_cv
+df$time_cv[is.na(df$time_cv)] <- df$days_last_fu
+```
+
+```{r}
+pvalue <- function(x, ...) {
+    # Construct vectors of data y, and groups (strata) g
+    y <- unlist(x)
+    g <- factor(rep(1:length(x), times=sapply(x, length)))
+    if (is.numeric(y)) {
+        # For numeric variables, perform a standard 2-sample t-test
+        p <- wilcox.test(y ~ g, paired=FALSE)$p.value
+    } else {
+        # For categorical variables, perform a chi-squared test of independence
+        p <- chisq.test(table(y, g))$p.value
+    }
+    # Format the p-value, using an HTML entity for the less-than sign.
+    # The initial empty string places the output on the line below the variable label.
+    c("", sub("<", "&lt;", format.pval(p, digits=3, eps=0.001)))
+}
+```
+
+
+```{r}
+install.packages("table1")
+install.packages("univariateTable")
+install.packages("ggplot2")
+install.packages("sjPlot")
+install.packages("sjmisc")
+install.packages("sjlabelled")
+library(ggplot2)
+library(table1)
+library(survival)
+library(univariateTable)
+
+
+df$amyloidosis <- as.factor(df$amyloidosis)
+amyloidosis <- df %>%
+  filter(amyloidosis == 1) 
+
+amyloidosis$chip_yn <- factor(amyloidosis$chip_yn, levels=c(1,0), labels=c("CHIP","No CHIP"))
+
+#amyloidosis$vaf_yn <- amyloidosis$vaf_1 >= 0.02 & amyloidosis$subject_id != 1182 & amyloidosis$subject_id != 2058
+
+amyloidosis$chip_yn[is.na(amyloidosis$chip_yn)] <- FALSE
+
+amyloidosis$vaf_yn <- amyloidosis$vaf_1 >= 0.005 & amyloidosis$subject_id != 1182 & amyloidosis$subject_id != 2058
+
+table1(~ age + factor(sex) + egfr + bnp + probnp +hs_tni + hs_tnt + gal3 + wall_thk + lvef + co + e + ee + lav + gls + hosp_all_total + hosp_cv_total| chip_yn, data = amyloidosis, overall = F, extra.col=list('P-value'=pvalue) )
+
+
+hfdf <- df %>%
+  filter(amyloidosis == 0) %>%
+  filter(sex == 1)
+
+
+df$loy_5 <- df$loy > 5
+df$loy_10 <- df$loy > 10
+df$loy_15 <- df$loy > 15
+df$loy_20 <- df$loy > 20
+
+hfdf <- hfdf %>%
+  drop_na(loy)
+
+amyloidosis_loy <- amyloidosis %>%
+  filter(sex == 1)
+
+table1(~ factor(vaf_yn) + age + factor(sex) + egfr + bnp + probnp +hs_tni + hs_tnt + gal3 + wall_thk + lvef + co + e + ee + lav + gls| amyloidosis, data = df, overall = F, extra.col=list('P-value'=pvalue) )
+
+table1(~ factor(chip_yn) + avg_vaf + cum_vaf + num_var| amyloidosis, data = df, overall = F, extra.col=list('P-value'=pvalue))
+       
+       
+```
+
+```{r}
+library(survival)
+library(ggsurvfit)
+library(survminer)
+
+library(sjPlot)
+library(sjmisc)
+library(sjlabelled)
+amyloid_df <- df %>%
+  filter(amyloidosis == 1) 
+amyloid_df$vaf_yn <- amyloid_df$vaf_1 >= 0.005 & amyloid_df$subject_id != 1182 & amyloid_df$subject_id != 2058
+amyloid_df$vaf_yn[is.na(amyloid_df$vaf_yn)] <- FALSE
+
+survfit(Surv(time_cv, status_cv) ~ chip_yn, data = amyloid_df) %>%
+  ggsurvplot(pval = TRUE, 
+             legend.labs = c("NO CHIP", "CHIP"),
+             risk.table =TRUE,
+             risk.table.y.text.col = TRUE,
+             risk.table.y.text = FALSE) 
+
+```
+
+```{r}
+hf_df <- df %>%
+  filter(amyloidosis == 0) %>%
+  filter(age > 70)
+
+  
+hf_df$vaf_yn <- hf_df$vaf_1 >= 0.02 & hf_df$subject_id != 1182 & hf_df$subject_id != 2058
+
+hf_df$vaf_yn[is.na(hf_df$vaf_yn)] <- FALSE
+
+hf_df <- hf_df %>% 
+  mutate(dnmt3a_yn = case_when(str_detect(id, "DNMT3A") ~ TRUE, TRUE ~ FALSE)) %>%
+  mutate(tet2_yn = case_when(str_detect(id, "TET2") ~ TRUE, TRUE ~ FALSE)) 
+  
+t.test(egfr ~ vaf_yn, data = hf_df)
+
+survfit(Surv(time, status) ~ chip_yn, data = hf_df) %>% 
+  ggsurvplot(data = hf_df, 
+             pval = TRUE, 
+             legend.labs = c("NO CHIP", "CHIP"),
+             risk.table = TRUE,
+             risk.table.y.text.col = TRUE,
+             risk.table.y.text = FALSE) 
+ 
+
+
+survfit(Surv(time_cv, status_cv) ~ chip_yn, data = hf_df) %>% 
+  ggsurvplot(data = hf_df, 
+             pval = TRUE, 
+             legend.labs = c("NO CHIP", "CHIP"),
+             risk.table = TRUE,
+             risk.table.y.text.col = TRUE,
+             risk.table.y.text = FALSE)
+
+table1(~ age + factor(sex) + egfr + bnp + probnp +hs_tni + hs_tnt + gal3 + wall_thk + lvef + co + e + ee + lav + gls| chip_yn, data = hf_df, overall = F, extra.col=list('P-value'=pvalue))
+
+model <- glm(ee ~ chip_yn + age + sex, data = amyloidosis, na.action=na.omit) 
+summary(model)
+
+df <- read_csv("chip_scanmp_cosmic_filter_covid.csv")
+
+loy <- df %>%
+  filter(loy > -5) %>%
+  filter(loy < 99) %>%
+  filter(subject_id != 1064) %>%
+  filter(sex == 1) %>%
+  filter(age >= 60) 
+
+model <- lm(loy_5 ~ amyloidosis + age, data = loy, na.action=na.omit) 
+plot(model)
+summary(model)
+anova(model, test = "F")
+summary(lm(loy ~ age + amyloidosis, data = loy, na.action=na.omit))
+
+wilcox.test(loy ~ amyloidosis, data = loy, na.action=na.omit)
+
+```
+
+```{r}
+install.packages("colorspace")
+library(colorspace)
+
+loy$amyloidosis <- as.factor(loy$amyloidosis)
+loy$amyloidosis <- factor(loy$amyloidosis, levels=c(0,1), labels=c("HFpEF/COVID","Cardiac Amyloidosis"))
+
+loy$disease <- cut(loy$Group, 
+                     breaks = c(0, 7.5, 8.5, 9.5), 
+                     labels = c("HF/CA", "COVID", "IPF"))
+
+q4 <- qualitative_hcl(3, palette = "Dark 3")
+
+ggplot(loy, aes(x = age, y = loy, color = disease)) +
+  geom_point() +
+  scale_color_discrete_qualitative(palette = "Dark 3") +
+  geom_smooth(method = "lm", se = FALSE, aes(group = disease)) +
+  labs(x = "Age", y = "% LOY", color = "Disease") +
+  theme_bw() 
+
+test <- loy %>%
+  filter(age >= 60) %>%
+  filter(age <= 69)
+
+loy %>% 
+  filter(amyloidosis == "HFpEF") %>%
+  summarise(mean(loy),median(loy), n(), mean(age))
+  
+
+model <- lm(loy ~ disease + age, data = loy, na.action=na.omit) 
+
+pos_loy <- loy %>%
+  filter(loy >= 0)
+
+model_5 <- glm(loy_5 ~ amyloidosis + age, data = loy, family = binomial)
+model_10 <- glm(loy_10 ~ amyloidosis + age, data = loy, family = binomial)
+model_20 <- glm(loy_20 ~ amyloidosis + age, data = loy, family = binomial)
+
+
+summary(model)
+tab_model(model)
+          #pred.labels = c("Intercept", "Diagnosis (Cardiac Amyloidosis)", "Age"),
+          #dv.labels = c("LOY(%)"))
+
+tab_model(model_20)
+          #pred.labels = c("Intercept", "Diagnosis (Cardiac Amyloidosis)", "Age"),
+          #dv.labels = c("LOY(20% threshold)"))
+
+
+
+model <- lm(amyloidosis ~ loy_20 + age, data = loy, na.action=na.omit) 
+summary(model)
+
+
+loy %>% 
+  filter(sex != 2) %>%
+  filter(Group != 8)%>%
+  group_by(amyloidosis) %>%
+  summarise(mean(loy), n(), mean(age))
+
+means_df <- loy %>% 
+  group_by(amyloidosis) %>% 
+  summarise(mean = mean(loy), se = sd(loy)/sqrt(n()))
+
+
+# Calculate the p-values of stratification group differences using t-tests
+pvals_list <- t.test(loy ~ amyloidosis, data = loy)
+
+d <- ggplot(means_df, aes(x = amyloidosis, y = mean, fill = amyloidosis)) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  labs(x = "Cardiac Amyloidosis Diagnosis", y = "Mean % LOY") +
+  scale_fill_manual(values = c("#619CFF", "#F8766D")) +
+  theme_bw() +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se), position = position_dodge(width = 0.9), width = 0.2) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(legend.position = "none")
+
+d + annotate("text", x = c(1), y = 9, 
+             label = paste0("p = ", round(as.numeric(pvals_list[3]), 4)), 
+             hjust = -1.3, vjust = -1.5, size = 5, color = "black")
+
+
+             
+```
+
+
+```{r}
+library(dplyr)
+library(ggpubr)
+# age group, stratification group, and continuous dependent variable
+loy$age_group <- cut(loy$age, 
+                     breaks = c(60, 70, 80, 100), 
+                     labels = c("60-69", "70-79", "80-100"), 
+                     include.lowest = TRUE)
+
+# Calculate the median values and interquartile ranges of dependent variable for each age group and stratification group
+medians_df <- loy %>% 
+  group_by(age_group, amyloidosis) %>% 
+  summarise(median = median(loy), iqr = IQR(loy))
+
+# Calculate the p-values of stratification group differences using t-tests
+pvals_df <- lapply(split(loy, factor(loy$age_group)), function(x)wilcox.test(data = x, loy ~ amyloidosis, paired = FALSE))
+
+# Merge medians_df and pvals_df data frames
+medians_df <- merge(medians_df, pvals_df, by = "age_group")
+
+# Create a grouped bar chart using ggplot2
+ggplot(medians_df, aes(x = age_group, y = median, fill = amyloidosis)) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  labs(x = "Age group", y = "Median % LOY", fill = "Cardiac Amyloidosis Diagnosis") + 
+  geom_errorbar(aes(ymin = median - iqr/2, ymax = median + iqr/2), position = position_dodge(width = 0.9), width = 0.2) +
+  geom_text(aes(label = ifelse(pval < 0.05, "*", "ns")), y = medians_df$median + medians_df$iqr/2, position = position_dodge(width = 0.9), size = 6)
+
+d + annotate("text", x = c(1,2,3), y = 15, 
+             label = paste0("p = ", round(as.numeric(pvals_list), 3)), 
+             hjust = 0.4, vjust = 0.4, size = 5, color = "black")
+
+
+```
+
+```{r}
+library(tidyr)
+library(broom)
+means_df <- loy %>% group_by(age_group, amyloidosis) %>% 
+  summarise(mean = mean(loy), se = sd(loy)/sqrt(n()))
+
+pvals_df <- lapply(split(loy, factor(loy$age_group)), function(x)t.test(data = x, loy ~ amyloidosis, paired = FALSE))
+
+# Calculate the p-values of stratification group differences using t-tests
+pvals_list <- lapply(unique(loy$age_group), function(age_grp) {
+  t.test(loy ~ amyloidosis, data = subset(loy, age_group == age_grp))$p.value})
+
+text_df <- data.frame(
+  age_group = c("60-69", "70-79", "80-100"),
+  y_pos = c(80, 80, 80),
+  pval = round(as.numeric(pvals_list), 3)
+)
+# Combine age group and p-value into a data frame
+pvals_df <- data.frame(age_group = unique(loy$age_group), pval = pvals_list)
+
+# Merge means_df and pvals_df data frames
+means_df <- merge(means_df, pvals_df, by = "age_group")
+
+
+# Create a grouped bar chart with significance test labels using ggplot2
+p <- ggplot(means_df, aes(x = age_group, y = mean, fill = amyloidosis)) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  labs(x = "Age group", y = "Mean % LOY", fill = "Cardiac Diagnosis") +
+  scale_fill_manual(values = c("#619CFF", "#F8766D")) +
+  xlab("Age Group") +
+  ylab("Mean % LOY") +
+  theme_bw() +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se), position = position_dodge(width = 0.9), width = 0.2) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+p
+p + annotate("text", x = c(1, 2, 3), y = 14, 
+             label = paste0("p = ", round(as.numeric(pvals_list), 3)), 
+             hjust = 0.4, vjust = 0.4, size = 5, color = "black")
+```
+
+```{r}
+install.packages("reshape2")
+library(reshape2)
+
+# Calculate the frequency of the binary variable within each age group and convert to a data frame
+freq_df <- loy %>%
+  group_by(age_group, amyloidosis) %>%
+  summarize(freq = mean(loy_10) * 100) %>%
+  mutate(pct = paste0(round(freq, 1), "%"))
+
+# calculate chi-square test p-values for each age group and case/control group comparison
+pval_df <- loy %>%
+  group_by(age_group) %>%
+  summarise(pval = fisher.test(table(amyloidosis, loy_10))$p.value)
+
+# merge frequency and p-value data frames
+plot_df <- merge(freq_df, pval_df, by = "age_group")
+
+# plot bar graph
+g <- ggplot(data = freq_df, aes(x = age_group, y = freq, fill = amyloidosis)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_manual(values = c("#619CFF", "#F8766D")) + 
+  ggtitle("Frequency of LOY(10%) by age group and Cardiac Amyloidosis Diagnosis")+
+  theme_bw() +
+  labs(fill=NULL) +
+  ylab("Frequency (%)")+
+  xlab(NULL) +
+  geom_text(data = freq_df, aes(label = pct), position = position_dodge(width = 0.9), vjust = -0.5) +
+  scale_y_continuous(limits = c(0, 50), expand = c(0, 0.1)) 
+  
+g + annotate("text", x = c(1, 2, 3), y = 46, 
+             label = paste0("p = ", round(as.numeric(pval_df$pval), 3)), 
+             #hjust = 0.4, vjust = 0.4, size = 5, color = "black",
+             position = position_dodge(width = 0.9), vjust = -0.5 )
+```
+
+```{r}
+# Calculate frequency of my_variable by case_control group
+freq_table <- loy %>% 
+  group_by(amyloidosis) %>% 
+  summarise(n = n(), 
+            freq = sum(loy_5 ==1)/sum(n),
+            perc = freq *100) %>% 
+  mutate(pct = paste0(round(freq*100, 1), "%"))
+
+# Chi-square test of association between my_variable and case_control
+chisq_test <- fisher.test(table(loy$loy_5, loy$amyloidosis))
+
+# Create bar plot of my_variable frequency by case_control
+ggplot(freq_table, aes(x = amyloidosis, y = perc, fill = amyloidosis)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = pct), position = position_dodge(width = 0.9), vjust = -0.5) +
+  scale_y_continuous(limits = c(0, 100), expand = c(0, 0.1)) +
+  labs(y = "Frequency") +
+  scale_fill_manual(values = c("#619CFF", "#F8766D")) +
+  ggtitle("Frequency of LOY (5% threshold) by Cardiac Amyloidosis Diagnosis") +
+  theme_bw() +
+  xlab(NULL) +
+  labs(fill=NULL) +
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.position = "bottom") +
+  annotate("text", x = 1.5, y = 50, label = paste0("p = ", round(chisq_test$p.value, 3)), size = 4)
+```
+
+
+
+
+
+
+
+
+
+
+
+
