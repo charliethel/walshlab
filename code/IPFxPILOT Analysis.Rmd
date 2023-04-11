@@ -1,0 +1,92 @@
+---
+title: "IPF_LOY"
+author: "Charlie Thel"
+date: '2023-03-08'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(haven)
+library(dplyr)
+library(ggplot2)
+library(readxl)
+ipf <- read_sas("base.sas7bdat", encoding="")
+pilot <- read.csv("IPF LOY Pilot Data.csv")
+ipf <- filter(ipf, ifemale == 0)
+
+pilot <- pilot[order(pilot$SUBNUM), ]
+
+pilot$SUBNUM <- gsub("R", "", as.character(pilot$SUBNUM))
+
+pilot$SUBNUM <- gsub("-0", "-", as.character(pilot$SUBNUM))
+
+ipf$SUBNUM[!(ipf$SUBNUM %in% pilot$SUBNUM)]
+pilot$SUBNUM[!(pilot$SUBNUM %in% ipf$SUBNUM)]
+
+total <- left_join(pilot, ipf, by = "SUBNUM")
+
+total <- subset(total, select = c(SUBNUM, baseheig, agei, loy, bfvc, bdlcoa, bdlcopp, bfvcpp, mhlymph, mhleuk, smokstat))
+
+total <- filter(total, loy <= 99)
+total <- filter(total, loy > 0)
+total <- filter(total, mhlymph == 0)
+total <- filter(total, mhleuk == 0)
+
+total$loythreshold <- NA
+total$loythreshold[total$loy >= 10] <- "Above 10% LOY"
+total$loythreshold[total$loy <= 10] <- "Below 10% LOY"
+
+total$age_group <- cut(total$agei, breaks = c(50, 70, 90), labels = c("50-65", "66-80", "81-90"), include.highest = TRUE)
+
+split_data <- split(total, total$age_group)
+split_data
+ttest_func <- function(df) {
+  t.test(bfvcpp ~ loythreshold, data = df)$p.value
+}
+
+# apply function to each group of category1
+ttest_data <- lapply(split_data, function(x) {
+  data.frame(age_group = unique(x$age_group),
+             p_value = ttest_func(x))
+})
+
+ttest_data
+
+totaledit <- aggregate(bfvcpp ~ age_group + loythreshold, data = total, FUN = mean)
+totaledit
+ttest_data <- do.call(rbind, ttest_data)
+
+ggplot(totaledit, aes(x = age_group, y =bfvcpp, fill = loythreshold)) + geom_bar(stat = 'identity', position = 'dodge') + theme_bw()
+
+total
+lmHeight = lm(bfvcpp~loythreshold + agei, data = total)
+summary(lmHeight) 
+
+
+```
+
+```{r}
+# events
+events <- read_sas("events.sas7bdat", encoding="")
+outcomes <- left_join(pilot, events, by = "SUBNUM")
+outcomes
+
+ggplot(outcomes, aes(x = loy, y = daysdth)) + geom_point()
+```
+
+```{r}
+population <- read_sas("pop.sas7bdat", encoding = "")
+deathcause <- left_join(pilot, population, by = "SUBNUM")
+deathcause
+deathcause$sdthcdli <- as.factor(deathcause$sdthcdli)
+
+deathcause$sdthcdlc <- as.factor(deathcause$sdthcdlc)
+
+ggplot(deathcause, aes(x = sdthcdlc, y = loy )) + geom_boxplot()
+```
+
